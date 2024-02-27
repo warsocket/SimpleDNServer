@@ -6,7 +6,6 @@ use std::mem::transmute;
 use std::collections::HashMap;
 
 const THREADS:usize = 8;
-
 type Buffer = [u8;0xFFFF];
 
 //0x0001 -> 0x0100 on LE system, stays same on BE system
@@ -20,14 +19,43 @@ const dns_A:u16 = mk_native_be_u16(1);
 const dns_AAAA:u16 = mk_native_be_u16(28);
 
 
-fn main() -> std::io::Result<()> {
+/*
+    Wireformat (read form stdin by default)
+    Major:1 Minor:1 (0 values are used for testing only)
+    Supplies config settings and DNS records to serve
 
-    let master_socket = UdpSocket::bind("127.53.53.53:53")?;
-    // let master_socket = UdpSocket::bind("::1:53")?;
-    let mut threads:Vec<thread::JoinHandle<Result<(), std::io::Error>>> = vec!();
+    Read chunks of 1kb bytes (all values are Big endian if applicable)
+    0x000 QWORD: DNSTREAM
+    0x008 QWORD: Length of the section in chunks (should be \x0000000000000001 )
+    0x010 DWORD: major version number (if this matches, with the baked in number you can parse it)
+    0x018 DWORD: minor version number (this number can increase for non breaking changes)
+    0x0F0 QWORD: Number of records to follow (in 1 Kb chunks)
+    .... Reserved: all reserved bytes should be 0x00
+    0x3F8 DWORD: Number of dns records to follow
+
+    //and every record comes in 1kb chunks also
+
+    0x000 QWORD: \x00RECORD\x00
+    0x008 QWORD: Length of the section in chunks (should be \x0000000000000001 )
+    0x010 DWORD: major version number (if this matches, with the baked in number you can parse it)
+    0x018 DWORD: minor version number (this number can increase for non breaking changes)
+    .... Reserved: all reserved bytes should be 0x00
+    //next to bytes could be seen as word containing length, but ony as long as 00 byte stays reserved, which I wont guarantee
+    0x3F8 BYTE: reserved at \x00
+    0x3F9 WORD: length of data in 0x400
+    0x3FA WORD: length of data in 0x800
+    0x3FC WORD: dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
+    0x3FE WORD: Reserved at \x00\x01 (might be used for class later)
+
+    0x400: Dns domain name wire format
+    0x4FF: Reserved
+
+    0x800: DNS record data
+*/
 
 
-    //TODO: This should be parsed from stdin (or config file)
+fn parse_records() -> Result<LookupTable, &'static str>{
+
     let mut dns_A_table:ReverseLookupName = HashMap::new();
     dns_A_table.insert(vec!("localhost".to_string()), vec!(b"\x7F\x00\x00\x01".to_vec()));
     dns_A_table.insert(vec!("test".to_string(), "local".to_string()), vec!(b"\x01\x01\x01\x01".to_vec(),b"\x01\x01\x01\x02".to_vec()));
@@ -36,8 +64,19 @@ fn main() -> std::io::Result<()> {
     let mut lookup_table:LookupTable = HashMap::new();
     lookup_table.insert(dns_A, dns_A_table);
     let lookup_table:LookupTable = lookup_table;
-    /////////////////////////////////////////////////////////
-    
+
+    return Ok(lookup_table)
+}
+
+
+
+fn main() -> std::io::Result<()> {
+
+    let master_socket = UdpSocket::bind("127.53.53.53:53")?;
+    // let master_socket = UdpSocket::bind("::1:53")?;
+    let mut threads:Vec<thread::JoinHandle<Result<(), std::io::Error>>> = vec!();
+    let lookup_table:LookupTable = parse_records().expect("Could not parse configuration");
+
     //craate threads and start them
     for _ in 0..THREADS{
         let socket = master_socket.try_clone().unwrap();
