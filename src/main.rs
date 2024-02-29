@@ -4,8 +4,10 @@ use std::thread;
 use std::mem::size_of;
 use std::mem::transmute;
 use std::collections::HashMap;
+use std::io;
+use std::io::Read;
 
-const THREADS:usize = 8;
+const THREADS:u16 = 8;
 type Buffer = [u8;0xFFFF];
 
 //0x0001 -> 0x0100 on LE system, stays same on BE system
@@ -29,56 +31,167 @@ const dns_AAAA:u16 = mk_native_be_u16(28);
     0x008 QWORD: Length of the section in chunks (should be \x0000000000000001 )
     0x010 DWORD: major version number (if this matches, with the baked in number you can parse it)
     0x018 DWORD: minor version number (this number can increase for non breaking changes)
-    0x0F0 QWORD: Number of records to follow (in 1 Kb chunks)
     .... Reserved: all reserved bytes should be 0x00
     0x3F8 DWORD: Number of dns records to follow
 
     //and every record comes in 1kb chunks also
 
-    0x000 QWORD: \x00RECORD\x00
+    0x000 QWORD: RECORD\x00\x00
     0x008 QWORD: Length of the section in chunks (should be \x0000000000000001 )
     0x010 DWORD: major version number (if this matches, with the baked in number you can parse it)
     0x018 DWORD: minor version number (this number can increase for non breaking changes)
     .... Reserved: all reserved bytes should be 0x00
     //next to bytes could be seen as word containing length, but ony as long as 00 byte stays reserved, which I wont guarantee
-    0x3F8 BYTE: reserved at \x00
-    0x3F9 WORD: length of data in 0x400
-    0x3FA WORD: length of data in 0x800
-    0x3FC WORD: dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
-    0x3FE WORD: Reserved at \x00\x01 (might be used for class later)
+    0x0F8 BYTE: reserved at \x00
+    0x0F9 BYTE: length of data in 0x400
+    0x0FA WORD: length of data in 0x800
+    0x0FC WORD: dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
+    0x0FE WORD: Reserved at \x00\x01 (might be used for class later)
 
-    0x400: Dns domain name wire format
-    0x4FF: Reserved
+    0x100: Dns domain name wire format
+    0x1FF: Reserved
 
-    0x800: DNS record data
+    0x200: DNS record data
 */
 
-
-fn parse_records() -> Result<LookupTable, &'static str>{
-
-    let mut dns_A_table:ReverseLookupName = HashMap::new();
-    dns_A_table.insert(vec!("localhost".to_string()), vec!(b"\x7F\x00\x00\x01".to_vec()));
-    dns_A_table.insert(vec!("test".to_string(), "local".to_string()), vec!(b"\x01\x01\x01\x01".to_vec(),b"\x01\x01\x01\x02".to_vec()));
-    let dns_A_table = dns_A_table;
-
-    let mut lookup_table:LookupTable = HashMap::new();
-    lookup_table.insert(dns_A, dns_A_table);
-    let lookup_table:LookupTable = lookup_table;
-
-    return Ok(lookup_table)
+#[derive(Debug)]
+#[repr(C)]
+struct HeaderChunk{
+    signature:u64,
+    section_chunk_length:U64be,
+    version_major:U32be,
+    version_minor:U32be,
+    reserved:[u8;992],
+    num_records:U64be,
 }
 
+#[derive(Debug)]
+#[repr(C)]
+struct RecordChunk{
+    signature:u64,
+    section_chunk_length:U64be,
+    version_major:U32be,
+    version_minor:U32be,
+    reserved:[u8;224],
+    reserved_b:u8,
+    wire_domain_len:u8,
+    data_len: U16be,
+    dns_type: u16,
+    dns_class: u16,
+    wire_domain:[u8;0x100],
+    data:[u8;0x200],
+}
+
+impl RecordChunk{
+    fn get_wire_domain(&self) -> &[u8]{
+        &self.wire_domain[0..usize::from(self.wire_domain_len)] 
+    }
+
+    fn get_data(&self) -> &[u8]{
+        &self.data[0..usize::from(self.data_len.get())] 
+    }    
+}
+
+
+fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
+
+    // return Ok(lookup_table)
+    let mut stdin = io::stdin().lock();
+    let mut chunk = [0u8;1024];
+    stdin.read(&mut chunk[..]);
+    
+    let header = unsafe{transmute::<&[u8;0x400], &HeaderChunk>(&chunk)};
+
+    
+    //TODO: checking other fields, and see if they are ok
+
+    let num_records = header.num_records.get();
+    // println!("{}",num_records );
+
+    let mut lookup_table:LookupTable = HashMap::new();
+
+    for record_number in 0..num_records{
+    //     println!("parsing record {}", record_number);
+
+        let mut chunk = [0u8;1024];
+        stdin.read(&mut chunk[..]);
+        let record = unsafe{transmute::<&[u8;0x400], &RecordChunk>(&chunk)};
+
+        let wire_domain = record.get_wire_domain();
+
+        // table domain -> array of answer data
+        let mut table: &mut HashMap< &[u8], Vec<Vec<u8>> > = match lookup_table.get_mut(&record.dns_type){
+            Some(x) => x,
+            None => {
+                lookup_table.insert(record.dns_type, HashMap::new());
+                lookup_table.get_mut(&record.dns_type).unwrap()
+            }
+        };
+
+        let mut data: &mut Vec<Vec<u8>> = match table.get_mut(wire_domain){
+            Some(x) => x,
+            None => {
+                table.insert(wire_domain, vec!());
+                table.get_mut(wire_domain).unwrap()
+            }
+        };
+        data.push(record.get_data().to_vec());
+    }
+
+    Ok(lookup_table)
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct U16be{
+    bytes: [u8;2]
+}
+impl U16be{
+    fn get(&self) -> u16{
+        u16::from_be_bytes(self.bytes)
+    }
+    fn put(&mut self, value:u16){
+        self.bytes = value.to_be_bytes();
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct U32be{
+    bytes: [u8;4]
+}
+impl U32be{
+    fn get(&self) -> u32{
+        u32::from_be_bytes(self.bytes)
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)]
+struct U64be{
+    bytes: [u8;8]
+}
+impl U64be{
+    fn get(&self) -> u64{
+        u64::from_be_bytes(self.bytes)
+    }
+}
 
 
 fn main() -> std::io::Result<()> {
 
+    // println!("{:?}", size_of::<HeaderChunk>());
+    // println!("{:?}", size_of::<RecordChunk>());
+    // println!("{:?}", size_of::<[u8;0x400]>());
+    
     let master_socket = UdpSocket::bind("127.53.53.53:53")?;
+    let num_threads:u16 = 8;
     // let master_socket = UdpSocket::bind("::1:53")?;
     let mut threads:Vec<thread::JoinHandle<Result<(), std::io::Error>>> = vec!();
     let lookup_table:LookupTable = parse_records().expect("Could not parse configuration");
 
     //craate threads and start them
-    for _ in 0..THREADS{
+    for _ in 0u16..num_threads{
         let socket = master_socket.try_clone().unwrap();
         let lt = lookup_table.clone();
 
@@ -108,20 +221,23 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
     let header:&mut Header = unsafe{transmute::<&mut Buffer, &mut Header>(buffer)};
 
     let mut index:usize = 0;
-    let mut name:Vec<String> = vec!();
+    // let mut name:Vec<String> = vec!();
 
     loop{
         let len:usize = header.body[index] as usize;
         if (len==0) {index += 1; break};
-        name.push( String::from_utf8(header.body[index+1..index+len+1].to_vec()).unwrap() );
+        // name.push( String::from_utf8(header.body[index+1..index+len+1].to_vec()).unwrap() );
         index += len+1;
     }
+    let wire_domain = &header.body[0..index];
+
+    // println!("{:?}", wire_domain);
 
     //now lookup the answer
     let dns_type:[u8;2] = [header.body[index], header.body[index+1]];
 
     let m = match(lookup.get( unsafe{transmute::<&[u8;2], &u16>(&dns_type)} )){
-        Some(typed_lookup) => typed_lookup.get(&name),
+        Some(typed_lookup) => typed_lookup.get(wire_domain),
         None => None,
     };
 
@@ -175,7 +291,8 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
         }
 
         //set anmount of answers
-        [header.a.high, header.a.low] = (answers.len() as u16).to_be_bytes();
+        // [header.a.high, header.a.low] = (answers.len() as u16).to_be_bytes();
+        header.a.put(answers.len() as u16);
 
         //adjust size of packet to send back
         *size += offset;
@@ -191,27 +308,18 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
 }
 
-struct U16be{
-    high:u8,
-    low:u8,
-}
-
-type LookupTable = HashMap<u16, ReverseLookupName>;
-type ReverseLookupName = HashMap<Vec<String>, Vec<Vec<u8>>>;
+type LookupTable<'a> = HashMap<u16, ReverseLookupName<'a>>;
+// type ReverseLookupName = HashMap<Vec<String>, Vec<Vec<u8>>>;
+type ReverseLookupName<'a> = HashMap<&'a [u8], Vec<Vec<u8>>>;
 
 // struct TypeAnswer
 
-
-impl U16be{
-    fn get(&self) -> u16{
-        return (self.high as u16) <<8 | self.low as u16;
-    }
-}
-
+#[repr(C)]
 struct Flags{
     bytes: [u8;2]
 }
 
+#[repr(C)]
 struct Header{
     trans_id: U16be,
     flags: [u8;2],
@@ -222,6 +330,7 @@ struct Header{
     body: [u8;0xFFFF-12]
 }
 
+#[repr(C)]
 union HeaderCast{
     raw: Buffer,
     header: ManuallyDrop<Header>,
