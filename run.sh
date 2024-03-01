@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-./rundns.py | sudo ./target/release/dns
+cargo build --release
+cat dns.conf | ./rundns.py | sudo ./target/release/dns
