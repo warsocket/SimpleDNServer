@@ -42,11 +42,14 @@ const dns_AAAA:u16 = mk_native_be_u16(28);
     0x018 DWORD: minor version number (this number can increase for non breaking changes)
     .... Reserved: all reserved bytes should be 0x00
     //next to bytes could be seen as word containing length, but ony as long as 00 byte stays reserved, which I wont guarantee
-    0x0F8 BYTE: reserved at \x00
-    0x0F9 BYTE: length of data in 0x400
-    0x0FA WORD: length of data in 0x800
-    0x0FC WORD: dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
-    0x0FE WORD: Reserved at \x00\x01 (might be used for class later)
+
+    0x0F4 DWORD: dns record TTL
+    0x0F8 WORD:  dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
+    0x0FA WORD:  dns class; will be \x00\x01  in 99% of all cases
+
+    0x0FC BYTE:  reserved at \x00
+    0x0FD BYTE:  length of data in 0x400
+    0x0FE WORD:  length of data in 0x800
 
     0x100: Dns domain name wire format
     0x1FF: Reserved
@@ -72,12 +75,16 @@ struct RecordChunk{
     section_chunk_length:U64be,
     version_major:U32be,
     version_minor:U32be,
-    reserved:[u8;224],
+    reserved:[u8;220],
+
+    dns_ttl: u32,
+    dns_type: u16,
+    dns_class: u16,
+
     reserved_b:u8,
     wire_domain_len:u8,
     data_len: U16be,
-    dns_type: u16,
-    dns_class: u16,
+
     wire_domain:[u8;0x100],
     data:[u8;0x200],
 }
