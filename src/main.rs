@@ -17,8 +17,8 @@ const fn mk_native_be_u16(num:u16) -> u16{
     )}
 }
 
-const dns_A:u16 = mk_native_be_u16(1);
-const dns_AAAA:u16 = mk_native_be_u16(28);
+// const dns_A:u16 = mk_native_be_u16(1);
+// const dns_AAAA:u16 = mk_native_be_u16(28);
 
 
 /*
@@ -315,15 +315,16 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
         */
 
         //copy answer into packet
-        let mut answer_len:usize = 0;
+        // let mut answer_len:usize = 0;
+        let mut answer_index = index;
         for answer in &answers{
-            header.body[(index)..(index+answer.len())].copy_from_slice(&answer);
-            answer_len += answer.len();
+            header.body[(answer_index)..(answer_index+answer.len())].copy_from_slice(&answer);
+            answer_index += answer.len();
         }
 
         //adjust size of packet to send back
-        // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
-        *size = 12 + index + answer_len;
+        let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
+        *size = 12 + answer_index;//+ index + answer_len;
 
 
 
