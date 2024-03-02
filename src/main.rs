@@ -99,6 +99,10 @@ impl RecordChunk{
     }    
 }
 
+#[derive(Clone)]
+struct AnswerData{
+    data: Vec<u8>
+}
 
 fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
 
@@ -125,7 +129,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
         let wire_domain = record.get_wire_domain();
 
         // table domain -> array of answer data
-        let mut table: &mut HashMap< Vec<u8>, Vec<Vec<u8>> > = match lookup_table.get_mut(&record.dns_type){
+        let mut table: &mut HashMap< Vec<u8>, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
             Some(x) => x,
             None => {
                 lookup_table.insert(record.dns_type, HashMap::new());
@@ -133,7 +137,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
             }
         };
 
-        let mut data: &mut Vec<Vec<u8>> = match table.get_mut(wire_domain){
+        let mut data: &mut Vec<AnswerData> = match table.get_mut(wire_domain){
             Some(x) => x,
             None => {
                 table.insert(wire_domain.to_vec(), vec!());
@@ -141,7 +145,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
             }
         };
 
-        data.push(record.get_data().to_vec());
+        data.push( AnswerData{data:record.get_data().to_vec()} );
     }
 
     Ok(lookup_table)
@@ -252,7 +256,9 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
         //produce answers
         let mut answers:Vec<Vec<u8>> = vec!();
+        //record: &Vec<AnswerData>
         for record in data{
+            // let record:()=record;
 
             let mut answer:Vec<u8> = vec!(0xc0,0x0c); //points to queried name
 
@@ -271,14 +277,16 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
             answer.push(0x2c);
 
             //specific answer type
-            let len:[u8;2] = (record.len() as u16).to_be_bytes();
+            let len:[u8;2] = (record.data.len() as u16).to_be_bytes();
             answer.push(len[0]);
             answer.push(len[1]);
 
             //data record
-            for byte in record{
-                answer.push(*byte);
+            // for item in record{
+            for byte in &record.data{
+                answer.push(*byte);    
             }
+            // }
 
             answers.push(answer);
         }
@@ -316,7 +324,7 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 }
 
 type LookupTable<'a> = HashMap<u16, ReverseLookupName<'a>>;
-type ReverseLookupName<'a> = HashMap<Vec<u8>, Vec<Vec<u8>>>;
+type ReverseLookupName<'a> = HashMap<Vec<u8>, Vec<AnswerData>>;
 
 
 #[repr(C)]
