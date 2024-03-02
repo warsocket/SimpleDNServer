@@ -28,14 +28,17 @@ def record(domain_name, dns_ttl, dns_class, dns_type, dns_data):
 
 	assert(len(chunk) == 1024)
 
+	# print(chunk)
 	return chunk
 
 record_type = {
 	"A": 1,
+	"NS": 2,
 }
 
 record_data = {
 	"A": lambda x: struct.pack(">BBBB", *[int(s) for s in x.split(".")]),
+	"NS": lambda x: domain2wire(x),
 }
 
 record_class = {

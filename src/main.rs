@@ -78,8 +78,8 @@ struct RecordChunk{
     reserved:[u8;220],
 
     dns_ttl: u32,
-    dns_type: u16,
     dns_class: u16,
+    dns_type: u16,
 
     reserved_b:u8,
     wire_domain_len:u8,
