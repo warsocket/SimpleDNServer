@@ -44,8 +44,8 @@ const dns_AAAA:u16 = mk_native_be_u16(28);
     //next to bytes could be seen as word containing length, but ony as long as 00 byte stays reserved, which I wont guarantee
 
     0x0F4 DWORD: dns record TTL
-    0x0F8 WORD:  dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
-    0x0FA WORD:  dns class; will be \x00\x01  in 99% of all cases
+    0x0F8 WORD:  dns class; will be \x00\x01  in 99% of all cases
+    0x0FA WORD:  dns type in big endian (eg; A =\x0001 AAAA=\x001c etc)
 
     0x0FC BYTE:  reserved at \x00
     0x0FD BYTE:  length of data in 0x400
@@ -111,6 +111,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
 
     
     //TODO: checking other fields, and see if they are ok
+    //TODO: use ttl form config file instead of 300
 
     let num_records = header.num_records.get();
     let mut lookup_table:LookupTable = HashMap::new();
