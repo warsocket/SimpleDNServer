@@ -6,8 +6,8 @@ use std::mem::transmute;
 use std::collections::HashMap;
 use std::io;
 use std::io::Read;
+use std::time;
 
-const THREADS:u16 = 8;
 type Buffer = [u8;0xFFFF];
 
 //0x0001 -> 0x0100 on LE system, stays same on BE system
@@ -113,12 +113,9 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
     //TODO: checking other fields, and see if they are ok
 
     let num_records = header.num_records.get();
-    // println!("{}",num_records );
-
     let mut lookup_table:LookupTable = HashMap::new();
 
     for record_number in 0..num_records{
-    //     println!("parsing record {}", record_number);
 
         let mut chunk = [0u8;1024];
         stdin.read(&mut chunk[..]);
@@ -127,7 +124,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
         let wire_domain = record.get_wire_domain();
 
         // table domain -> array of answer data
-        let mut table: &mut HashMap< &[u8], Vec<Vec<u8>> > = match lookup_table.get_mut(&record.dns_type){
+        let mut table: &mut HashMap< Vec<u8>, Vec<Vec<u8>> > = match lookup_table.get_mut(&record.dns_type){
             Some(x) => x,
             None => {
                 lookup_table.insert(record.dns_type, HashMap::new());
@@ -138,10 +135,11 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
         let mut data: &mut Vec<Vec<u8>> = match table.get_mut(wire_domain){
             Some(x) => x,
             None => {
-                table.insert(wire_domain, vec!());
+                table.insert(wire_domain.to_vec(), vec!());
                 table.get_mut(wire_domain).unwrap()
             }
         };
+
         data.push(record.get_data().to_vec());
     }
 
@@ -208,6 +206,7 @@ fn main() -> std::io::Result<()> {
             loop{
                 let (mut size, src) = socket.recv_from(&mut buffer)?;
                 handle(&lt, &mut buffer, &mut size);
+                // std::thread::sleep(time::Duration::from_millis(10));
                 socket.send_to(&buffer[0..size], &src).unwrap();                
             }
 
@@ -215,7 +214,6 @@ fn main() -> std::io::Result<()> {
 
         threads.push(thread);
     }
-
 
     threads.into_iter().map(|t| t.join()).collect::<Vec<_>>();
     Ok(())
@@ -233,12 +231,11 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
     loop{
         let len:usize = header.body[index] as usize;
         if (len==0) {index += 1; break};
-        // name.push( String::from_utf8(header.body[index+1..index+len+1].to_vec()).unwrap() );
         index += len+1;
     }
     let wire_domain = &header.body[0..index];
 
-    // println!("{:?}", wire_domain);
+    // println!("domain | {:?}", wire_domain );
 
     //now lookup the answer
     let dns_type:[u8;2] = [header.body[index], header.body[index+1]];
@@ -298,7 +295,6 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
         }
 
         //set anmount of answers
-        // [header.a.high, header.a.low] = (answers.len() as u16).to_be_bytes();
         header.a.put(answers.len() as u16);
 
         //adjust size of packet to send back
@@ -308,18 +304,19 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
         //set last 4 bits to 0011 (No such name NXdomain)
         header.flags[1] |= 0x03;  //we are answering
-        header.flags[1] &= (!0x0c);  //we are answering
+        header.flags[1] &= !0x0c;  //we are answering
 
     }
     header.flags[0] |= 0x80;  //we are answering
+    header.flags[0] |= 0x04;  //server is authoritive
+    header.flags[1] &= 0x7F;  //server does not do recursion
+
 
 }
 
 type LookupTable<'a> = HashMap<u16, ReverseLookupName<'a>>;
-// type ReverseLookupName = HashMap<Vec<String>, Vec<Vec<u8>>>;
-type ReverseLookupName<'a> = HashMap<&'a [u8], Vec<Vec<u8>>>;
+type ReverseLookupName<'a> = HashMap<Vec<u8>, Vec<Vec<u8>>>;
 
-// struct TypeAnswer
 
 #[repr(C)]
 struct Flags{

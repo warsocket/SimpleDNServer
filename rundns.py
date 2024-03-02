@@ -4,15 +4,6 @@ import sys
 import re
 VERSION_MAJOR = 2
 VERSION_MINOR = 1
-num_records = 1
-
-chunk = bytearray(b"\x00"*1024)
-chunk[0x000:0x000+8] = b"DNSTREAM"
-chunk[0x008:0x008+16] = struct.pack(">QLL", 1, VERSION_MAJOR, VERSION_MINOR)
-chunk[0x3F8:0x3F8+8] = struct.pack(">Q", num_records)
-
-assert(len(chunk) == 1024)
-sys.stdout.buffer.write(chunk)
 
 
 def domain2wire(domain):
@@ -39,21 +30,42 @@ def record(domain_name, dns_ttl, dns_class, dns_type, dns_data):
 
 	return chunk
 
+record_type = {
+	"A": 1,
+}
 
 record_data = {
-	"A": lambda x: (1, struct.pack(">BBBB", *[int(s) for s in x.split(".")]) )
+	"A": lambda x: struct.pack(">BBBB", *[int(s) for s in x.split(".")]),
 }
 
 record_class = {
-	"IN": 1
+	"IN": 1,
 }
 
 ################################################################################
+records = []
 for line in sys.stdin:
-	(domain_name, dns_ttl, dns_class, dns_type, dns_data) = re.split(" +|\t+|\n+", line.rstrip(), 4)
+
+	line = line.rstrip().split("#",1)[0] #remove trailing  newline, remove comments
+	split = re.split(" +|\t+|\n+", line, 4) # split into parameters
+	if split == [""]: continue # ignore empty lines
+
+	try:
+		(domain_name, dns_ttl, dns_class, dns_type, dns_data) = split
+	except ValueError: 
+		print(f"Warning: Ignoring malformed config statement: '{line}' ", file=sys.stderr)
+
+	records.append(
+		record( domain_name, int(dns_ttl), record_class[dns_class], record_type[dns_type], record_data[dns_type](dns_data) )
+	)
 
 
-wire_type_value, wire_data = record_data[dns_type](dns_data)
-chunk = record( domain_name, int(dns_ttl), record_class[dns_class], wire_type_value, wire_data )
-
+chunk = bytearray(b"\x00"*1024)
+chunk[0x000:0x000+8] = b"DNSTREAM"
+chunk[0x008:0x008+16] = struct.pack(">QLL", 1, VERSION_MAJOR, VERSION_MINOR)
+chunk[0x3F8:0x3F8+8] = struct.pack(">Q", len(records))
+assert(len(chunk) == 1024)
 sys.stdout.buffer.write(chunk)
+
+for record in records:
+	sys.stdout.buffer.write(record)
