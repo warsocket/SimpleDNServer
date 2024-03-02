@@ -101,7 +101,8 @@ impl RecordChunk{
 
 #[derive(Clone)]
 struct AnswerData{
-    data: Vec<u8>
+    data: Vec<u8>,
+    ttl: u32
 }
 
 fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
@@ -145,7 +146,7 @@ fn parse_records<'a>() -> Result<LookupTable<'a>, &'static str>{
             }
         };
 
-        data.push( AnswerData{data:record.get_data().to_vec()} );
+        data.push( AnswerData{data:record.get_data().to_vec(), ttl:record.dns_ttl} );
     }
 
     Ok(lookup_table)
@@ -231,8 +232,8 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
     let header:&mut Header = unsafe{transmute::<&mut Buffer, &mut Header>(buffer)};
 
     let mut index:usize = 0;
-    // let mut name:Vec<String> = vec!();
 
+    //get domain labels (domain name)
     loop{
         let len:usize = header.body[index] as usize;
         if (len==0) {index += 1; break};
@@ -242,15 +243,21 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
     // println!("domain | {:?}", wire_domain );
 
-    //now lookup the answer
+    //get type and class
     let dns_type:[u8;2] = [header.body[index], header.body[index+1]];
+    index += 2;
 
+    let dns_class:[u8;2] = [header.body[index], header.body[index+1]];
+    index += 2;
+
+
+    //now lookup the answer
     let m = match(lookup.get( unsafe{transmute::<&[u8;2], &u16>(&dns_type)} )){
         Some(typed_lookup) => typed_lookup.get(wire_domain),
         None => None,
     };
 
-    index += 4; //seek over type and class field
+    // index += 4; //seek over type and class field
 
     if let Some(data) = m{ //if we found a match
 
@@ -267,14 +274,15 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
             answer.push(dns_type[1]);
 
             //class
-            answer.push(0x00);
-            answer.push(0x01);
+            answer.push(dns_class[0]);
+            answer.push(dns_class[1]);
 
             //TTL (5 mins)
-            answer.push(0x00);
-            answer.push(0x00);
-            answer.push(0x01);
-            answer.push(0x2c);
+            let ttl = unsafe{ transmute::<u32,[u8;4]>(record.ttl) };
+            answer.push(ttl[0]);
+            answer.push(ttl[1]);
+            answer.push(ttl[2]);
+            answer.push(ttl[3]);
 
             //specific answer type
             let len:[u8;2] = (record.data.len() as u16).to_be_bytes();
@@ -282,38 +290,48 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
             answer.push(len[1]);
 
             //data record
-            // for item in record{
             for byte in &record.data{
                 answer.push(*byte);    
             }
-            // }
 
             answers.push(answer);
         }
 
+        //set anmount of answers
+        header.a.put(answers.len() as u16);
+        header.auth_rr.put(0);
+        header.add_rr.put(0);
+
+
+        /*
+
+        We should not be moving authority nor additional RR's, we can add them ourselves when needed later
+
         // move stuff downward to make space for answers
-        let offset:usize = answers.iter().map(|a| a.len()).sum();
+        let offset:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
         for i in (index..*size).rev(){
             header.body[i+offset] = header.body[i];
         }
+        */
 
         //copy answer into packet
+        let mut answer_len:usize = 0;
         for answer in &answers{
             header.body[(index)..(index+answer.len())].copy_from_slice(&answer);
-            index += answer.len();
+            answer_len += answer.len();
         }
 
-        //set anmount of answers
-        header.a.put(answers.len() as u16);
-
         //adjust size of packet to send back
-        *size += offset;
+        // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
+        *size = 12 + index + answer_len;
+
+
 
     }else{ //no match
 
         //set last 4 bits to 0011 (No such name NXdomain)
-        header.flags[1] |= 0x03;  //we are answering
-        header.flags[1] &= !0x0c;  //we are answering
+        header.flags[1] |= 0x03;
+        header.flags[1] &= !0x0c;
 
     }
     header.flags[0] |= 0x80;  //we are answering
@@ -327,10 +345,10 @@ type LookupTable<'a> = HashMap<u16, ReverseLookupName<'a>>;
 type ReverseLookupName<'a> = HashMap<Vec<u8>, Vec<AnswerData>>;
 
 
-#[repr(C)]
-struct Flags{
-    bytes: [u8;2]
-}
+// #[repr(C)]
+// struct Flags{
+//     bytes: [u8;2]
+// }
 
 #[repr(C)]
 struct Header{
