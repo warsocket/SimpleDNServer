@@ -67,6 +67,14 @@ for b in range(1,0x100):
 	assert( header["flags"]["reply"] == FORMERR )
 
 #######################################
-# b = 14
-# header = perform(b"\x00\x01", b"\x02ns\06domain\x05local" + bytes([b]))
-# print( f'{b:0x} {header["flags"]["reply"]}' )
+
+# check if unknown domains leads to refused and know domains + sub parts to NXdomain and or an answer
+header = perform(b"\x00\x01", b"\07example\x05local\x00")
+assert( header["flags"]["reply"] == REFUSED )
+
+header = perform(b"\x00\x01", b"\x06domain\x05local\x00")
+assert( header["flags"]["reply"] == NXDOMAIN )
+
+header = perform(b"\x00\x01", b"\x03www\x06domain\x05local\x00")
+assert( header["flags"]["reply"] == NOERROR )
+#######################################

@@ -35,6 +35,7 @@ record_type = {
 	"A": 1,
 	"NS": 2,
 	"AAAA": 28,
+	"SOA": 6,
 }
 
 def ipv4wire(string):
@@ -90,10 +91,28 @@ def ipv6wire(string):
 	return bytes(buffer)
 
 
+def soawire(string):
+	split = re.split(" +|\t+|\n+", string, 6)
+	
+	try:
+		(nameserver, email, serial, refresh, retry, expire, ttl) = re.split(" +|\t+|\n+", string, 6)
+	except ValueError:
+		raise ValueError
+
+	buffer = bytearray()
+	buffer.extend( domain2wire(nameserver) ),
+	buffer.extend( domain2wire(email) ),
+	buffer.extend( struct.pack(">LLLLL", *map(lambda x:int(x), [serial, refresh, retry, expire, ttl])) )
+
+	return bytes(buffer)
+	
+
+
 record_data = {
 	"A": ipv4wire,
 	"NS": lambda x: domain2wire(x),
 	"AAAA": ipv6wire,
+	"SOA": soawire,
 }
 
 record_class = {
