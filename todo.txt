@@ -1,0 +1,20 @@
+Security:  any input, malicous or not should not have:
+- lasting* impact on performance (including a DOS)
+- dislose onformation of any kind (eg: memory leak, returning too much data, etc)
+
+With lasting I mean that yes you can DDOS this server by congesting network traffic / CPU
+But if that subsides trhere should be no lasting effect, which also goes for malicius input which would crash the server
+
+Core security to complete:
+
+[ ] SECURE UTRUSTED QUERY's
+[ ] SECURE UNTRUSTED INPUT (from the python script, so no race conditions, faulty input should be ignored, or aborted on, well formed input should just be used for config / record input)
+
+
+Core features to implement:
+
+[ ]EDNS(0)
+[ ]DNSSEC generation from RSK
+[ ]NSEC
+[ ]NSEC3
+More gracefull Error handling in dns parsing / networking (lets try to conform to RFC a bit) (being functional agains most known dns clients is a ,ust, rfc compliance is a nice to have )

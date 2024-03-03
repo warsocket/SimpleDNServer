@@ -225,23 +225,80 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+/*
+DNS Return Code         DNS Return Message  Description
+RCODE:0     NOERROR     DNS Query completed successfully
+RCODE:1     FORMERR     DNS Query Format Error
+RCODE:2     SERVFAIL    Server failed to complete the DNS request
+RCODE:3     NXDOMAIN    Domain name does not exist
+RCODE:4     NOTIMP      Function not implemented
+RCODE:5     REFUSED     The server refused to answer for the query
+RCODE:6     YXDOMAIN    Name that should not exist, does exist
+RCODE:7     XRRSET      RRset that should not exist, does exist
+RCODE:8     NOTAUTH     Server not authoritative for the zone
+RCODE:9     NOTZONE     
+*/
+
+const NOERROR:u8 = 0;
+const FORMERR:u8 = 1;
+const SERVFAIL:u8 = 2;
+const NXDOMAIN:u8 = 3;
+const NOTIMP:u8 = 4;
+const REFUSED:u8 = 5;
+const YXDOMAIN:u8 = 6;
+const XRRSET:u8 = 7;
+const NOTAUTH:u8 = 8;
+const NOTZONE:u8 = 9;
 
 //just blast your answer in this buffer
 fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
     let header:&mut Header = unsafe{transmute::<&mut Buffer, &mut Header>(buffer)};
+    //I know we should tehcnically parse the dns anyway and not retur RR-type fields, but parsing werd stuff leads to risks, so we just set flags field and return rest as is.
 
+    //We only implement the Query opcode
+    if header.flags.get_opcode() != 0 {
+        header.flags.set_rcode(NOTIMP);
+        return;
+    }
+
+    // > 1 query is technically allowed, but no consensus on how to handle so we just disallow it.
+    if header.q.get() != 1 {
+        header.flags.set_rcode(REFUSED);
+        return;
+    }
+
+    // Answers are not allowed in a query
+    if header.a.get() != 0{
+        header.flags.set_rcode(FORMERR);
+        return;
+    }
+
+
+    //Get wire domain name
+    //TODO: use this place to check if server is authoritive, if not -> header.flags.set_rcode(REFUSED); (now we return NXDOMAIN for zones that aren't ours)
     let mut index:usize = 0;
-
-    //get domain labels (domain name)
-    loop{
+    loop{ //we allow 1 Q so a pointer to other dns label is not accepted.
         let len:usize = header.body[index] as usize;
-        if (len==0) {index += 1; break};
-        index += len+1;
+        if (len==0) { //end of name
+            index += 1;
+            break;
+        } else if len < 0b01000000 { //special label, other not allowed, binary obsoleted, ptr should be unused with 1 query max
+            index += len+1;    
+        } else {
+            header.flags.set_rcode(FORMERR);
+            return;
+        }
+
+        //whole dns wire name is longet than 256 bytes, which is not allowed by the protocol
+        if (HEADER_SIZE+index >= *size-POST_Q_SKIP ) | (index > 0x100){
+            header.flags.set_rcode(FORMERR);
+            return;
+        }
+        
     }
     let wire_domain = &header.body[0..index];
 
-    // println!("domain | {:?}", wire_domain );
 
     //get type and class
     let dns_type:[u8;2] = [header.body[index], header.body[index+1]];
@@ -257,15 +314,12 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
         None => None,
     };
 
-    // index += 4; //seek over type and class field
-
     if let Some(data) = m{ //if we found a match
 
         //produce answers
         let mut answers:Vec<Vec<u8>> = vec!();
-        //record: &Vec<AnswerData>
+
         for record in data{
-            // let record:()=record;
 
             let mut answer:Vec<u8> = vec!(0xc0,0x0c); //points to queried name
 
@@ -295,13 +349,18 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
             }
 
             answers.push(answer);
+
         }
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Writing start below this line, so aborting with ERROR in flags etc should happen above
+        ////////////////////////////////////////////////////////////////////////////////
+
 
         //set anmount of answers
         header.a.put(answers.len() as u16);
         header.auth_rr.put(0);
         header.add_rr.put(0);
-
 
         /*
 
@@ -324,21 +383,23 @@ fn handle(lookup: &LookupTable, buffer:&mut Buffer, size:&mut usize){
 
         //adjust size of packet to send back
         let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
-        *size = 12 + answer_index;//+ index + answer_len;
+        //12 is header size, answer index = Q+A size
+        *size = HEADER_SIZE + answer_index;//+ index + answer_len;
 
 
+        header.flags.set_rcode(NOERROR);
+        header.flags.set_auth(true);
 
     }else{ //no match
 
-        //set last 4 bits to 0011 (No such name NXdomain)
-        header.flags[1] |= 0x03;
-        header.flags[1] &= !0x0c;
+        header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
+        header.flags.set_auth(true);
 
     }
-    header.flags[0] |= 0x80;  //we are answering
-    header.flags[0] |= 0x04;  //server is authoritive
-    header.flags[1] &= 0x7F;  //server does not do recursion
 
+    //this is always true regardless of outcome
+    header.flags.set_response(true);
+    header.flags.set_recurse(false);
 
 }
 
@@ -346,20 +407,49 @@ type LookupTable<'a> = HashMap<u16, ReverseLookupName<'a>>;
 type ReverseLookupName<'a> = HashMap<Vec<u8>, Vec<AnswerData>>;
 
 
-// #[repr(C)]
-// struct Flags{
-//     bytes: [u8;2]
-// }
+#[repr(C)]
+struct Flags{
+    bytes: [u8;2]
+}
 
+impl Flags{
+    fn set_rcode(&mut self, rcode:u8){
+        self.bytes[1] &= 0b11110000;
+        self.bytes[1] |= (rcode&0b00001111);
+    }
+
+    fn set_response(&mut self, r:bool){
+        self.bytes[0] &= 0b01111111;
+        if r {self.bytes[0] |= 0b10000000};
+    }
+
+    fn set_auth(&mut self, a:bool){
+        self.bytes[0] &= 0b11111011;
+        if a {self.bytes[0] |= 0b00000100};
+    }
+
+    fn set_recurse(&mut self, r:bool){
+        self.bytes[1] &= 0b01111111;
+        if r {self.bytes[1] |= 0b10000000};
+    }
+
+    fn get_opcode(&self) -> u8{
+        (0b0111100 & self.bytes[0]) >> 3
+    }
+
+}
+
+const HEADER_SIZE:usize = 12;
+const POST_Q_SKIP:usize = 4; //size of type and class field in query
 #[repr(C)]
 struct Header{
     trans_id: U16be,
-    flags: [u8;2],
+    flags: Flags,
     q: U16be,
     a: U16be,
     auth_rr: U16be,
     add_rr:  U16be,
-    body: [u8;0xFFFF-12]
+    body: [u8;0xFFFF-HEADER_SIZE]
 }
 
 #[repr(C)]
