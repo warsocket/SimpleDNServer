@@ -1,25 +1,20 @@
 use std::net::UdpSocket;
-use std::mem::ManuallyDrop;
 use std::thread;
-use std::mem::size_of;
+// use std::mem::size_of;
 use std::mem::transmute;
 use std::collections::{HashSet, HashMap};
 use std::io;
 use std::io::Read;
-use std::time;
+// use std::time;
 
 type Buffer = [u8;0xFFFF];
 
 //0x0001 -> 0x0100 on LE system, stays same on BE system
-const fn mk_native_be_u16(num:u16) -> u16{
-    unsafe{transmute::<[u8;2], u16>(
-        [(num / 0x100) as u8, (num % 0x100) as u8]
-    )}
-}
-
-// const dns_A:u16 = mk_native_be_u16(1);
-// const dns_AAAA:u16 = mk_native_be_u16(28);
-
+// const fn mk_native_be_u16(num:u16) -> u16{
+//     unsafe{transmute::<[u8;2], u16>(
+//         [(num / 0x100) as u8, (num % 0x100) as u8]
+//     )}
+// }
 
 /*
     Wireformat (read form stdin by default)
@@ -111,7 +106,7 @@ fn parse_records() -> Result<Config, &'static str>{
     let mut zones:HashSet<Vec<u8>> = HashSet::new();
     let mut stdin = io::stdin().lock();
     let mut chunk = [0u8;1024];
-    stdin.read(&mut chunk[..]);
+    stdin.read(&mut chunk[..]).expect("Error reading Header chunk from stdin.");
     
     let header = unsafe{transmute::<&[u8;0x400], &HeaderChunk>(&chunk)};
 
@@ -122,16 +117,16 @@ fn parse_records() -> Result<Config, &'static str>{
     let num_records = header.num_records.get();
     let mut lookup_table:LookupTable = HashMap::new();
 
-    for record_number in 0..num_records{
+    for _record_number in 0..num_records{
 
         let mut chunk = [0u8;1024];
-        stdin.read(&mut chunk[..]);
+        stdin.read(&mut chunk[..]).expect("Error reading Record chunk from stdin.");
         let record = unsafe{transmute::<&[u8;0x400], &RecordChunk>(&chunk)};
 
         let wire_domain = record.get_wire_domain();
 
         // table domain -> array of answer data
-        let mut table: &mut HashMap< Vec<u8>, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
+        let table: &mut HashMap< Vec<u8>, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
             Some(x) => x,
             None => {
                 lookup_table.insert(record.dns_type, HashMap::new());
@@ -139,7 +134,7 @@ fn parse_records() -> Result<Config, &'static str>{
             }
         };
 
-        let mut data: &mut Vec<AnswerData> = match table.get_mut(wire_domain){
+        let data: &mut Vec<AnswerData> = match table.get_mut(wire_domain){
             Some(x) => x,
             None => { //adding a new domain
                 table.insert(wire_domain.to_vec(), vec!());
@@ -184,7 +179,7 @@ struct U32be{
     bytes: [u8;4]
 }
 impl U32be{
-    fn get(&self) -> u32{
+    fn _get(&self) -> u32{
         u32::from_be_bytes(self.bytes)
     }
 }
@@ -202,42 +197,32 @@ impl U64be{
 
 
 fn main() -> std::io::Result<()> {
-
-    // println!("{:?}", size_of::<HeaderChunk>());
-    // println!("{:?}", size_of::<RecordChunk>());
-    // println!("{:?}", size_of::<[u8;0x400]>());
     
     let master_socket = UdpSocket::bind("127.53.53.53:53")?;
-    let num_threads:u16 = 8;
     // let master_socket = UdpSocket::bind("::1:53")?;
-    let mut threads:Vec<thread::JoinHandle<Result<(), std::io::Error>>> = vec!();
+    let num_threads:u16 = 8;
     let config:Config = parse_records().expect("Could not parse configuration");
-    // let lookup_table = config.lookup;
-    // let zones_set = config.zones;
 
-    //craate threads and start them
+    //create threads and start them
     for _ in 0u16..num_threads{
-        let socket = master_socket.try_clone().unwrap();
-        // let lt = lookup_table.clone();
-        // let zones = zones_set.clone();
-        let conf = config.clone();//Config{lookup:lt, zones:zones};
 
-        let thread = thread::spawn (move || -> std::io::Result<()> {
-            
-            let mut buffer:Buffer = [0u8;0xFFFF];
-            loop{
-                let (mut size, src) = socket.recv_from(&mut buffer)?;
-                handle(&conf, &mut buffer, &mut size);
-                // std::thread::sleep(time::Duration::from_millis(10));
-                socket.send_to(&buffer[0..size], &src).unwrap();                
-            }
+        let socket = master_socket.try_clone().unwrap();
+
+        thread::scope(|s| {
+
+            s.spawn (|| -> std::io::Result<()> {
+                let mut buffer:Buffer = [0u8;0xFFFF];
+                loop{
+                    let (mut size, src) = socket.recv_from(&mut buffer)?;
+                    handle(&config, &mut buffer, &mut size);
+                    socket.send_to(&buffer[0..size], &src).unwrap();                
+                }
+            });
 
         });
 
-        threads.push(thread);
     }
 
-    threads.into_iter().map(|t| t.join()).collect::<Vec<_>>();
     Ok(())
 }
 
@@ -257,14 +242,14 @@ RCODE:9     NOTZONE
 
 const NOERROR:u8 = 0;
 const FORMERR:u8 = 1;
-const SERVFAIL:u8 = 2;
+const _SERVFAIL:u8 = 2;
 const NXDOMAIN:u8 = 3;
 const NOTIMP:u8 = 4;
 const REFUSED:u8 = 5;
-const YXDOMAIN:u8 = 6;
-const XRRSET:u8 = 7;
-const NOTAUTH:u8 = 8;
-const NOTZONE:u8 = 9;
+const _YXDOMAIN:u8 = 6;
+const _XRRSET:u8 = 7;
+const _NOTAUTH:u8 = 8;
+const _NOTZONE:u8 = 9;
 
 //just blast your answer in this buffer
 fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
@@ -305,7 +290,7 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
     let mut indices:Vec<usize> = vec!(index);
     loop{ //we allow 1 Q so a pointer to other dns label is not accepted.
         let len:usize = header.body[index] as usize;
-        if (len==0) { //end of name
+        if len==0 { //end of name
             index += 1;
             break;
         } else if len < 0b01000000 { //special label, other not allowed, binary obsoleted, ptr should be unused with 1 query max
@@ -356,7 +341,7 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
 
 
     //now lookup the answer
-    let m = match(lookup.get( unsafe{transmute::<&[u8;2], &u16>(&dns_type)} )){
+    let m = match lookup.get( unsafe{transmute::<&[u8;2], &u16>(&dns_type)} ) {
         Some(typed_lookup) => typed_lookup.get(wire_domain),
         None => None,
     };
@@ -426,7 +411,7 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
         }
 
         //adjust size of packet to send back
-        let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
+        // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
         //12 is header size, answer index = Q+A size
         *size = HEADER_SIZE + answer_index;//+ index + answer_len;
 
@@ -463,7 +448,7 @@ struct Flags{
 impl Flags{
     fn set_rcode(&mut self, rcode:u8){
         self.bytes[1] &= 0b11110000;
-        self.bytes[1] |= (rcode&0b00001111);
+        self.bytes[1] |= rcode&0b00001111;
     }
 
     fn set_response(&mut self, r:bool){
@@ -498,10 +483,4 @@ struct Header{
     auth_rr: U16be,
     add_rr:  U16be,
     body: [u8;0xFFFF-HEADER_SIZE]
-}
-
-#[repr(C)]
-union HeaderCast{
-    raw: Buffer,
-    header: ManuallyDrop<Header>,
 }

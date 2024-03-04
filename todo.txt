@@ -7,6 +7,7 @@ But if that subsides trhere should be no lasting effect, which also goes for mal
 
 Core security to complete:
 
+[ ] Drop root rights after opening socket
 [ ] SECURE UTRUSTED QUERY's
 [ ] SECURE UNTRUSTED INPUT (from the python script, so no race conditions, faulty input should be ignored, or aborted on, well formed input should just be used for config / record input)
 
