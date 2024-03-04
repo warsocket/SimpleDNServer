@@ -94,7 +94,7 @@ impl RecordChunk{
     }    
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct AnswerData{
     data: Vec<u8>,
     ttl: u32
@@ -123,22 +123,23 @@ fn parse_records() -> Result<Config, &'static str>{
         stdin.read(&mut chunk[..]).expect("Error reading Record chunk from stdin.");
         let record = unsafe{transmute::<&[u8;0x400], &RecordChunk>(&chunk)};
 
-        let wire_domain = record.get_wire_domain();
+        let wire_domain = record.get_wire_domain().to_vec();
 
         // table domain -> array of answer data
-        let table: &mut HashMap< WireFormat, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
+        // let table: &mut HashMap< WireFormat, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
+        let table: &mut HashMap< WireType, Vec<AnswerData> > = match lookup_table.get_mut(&wire_domain){
             Some(x) => x,
             None => {
-                lookup_table.insert(record.dns_type, HashMap::new());
-                lookup_table.get_mut(&record.dns_type).unwrap()
+                lookup_table.insert(wire_domain.clone(), HashMap::new());
+                lookup_table.get_mut(&wire_domain).unwrap()
             }
         };
 
-        let data: &mut Vec<AnswerData> = match table.get_mut(wire_domain){
+        let data: &mut Vec<AnswerData> = match table.get_mut(&record.dns_type){
             Some(x) => x,
             None => { //adding a new domain
-                table.insert(wire_domain.to_vec(), vec!());
-                table.get_mut(wire_domain).unwrap()
+                table.insert(record.dns_type, vec!());
+                table.get_mut(&record.dns_type).unwrap()
             }
         };
 
@@ -338,93 +339,92 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
         return;
     }
 
-
-
     //now lookup the answer
-    let m = match lookup.get( unsafe{transmute::<&[u8;2], &u16>(&dns_type)} ) {
-        Some(typed_lookup) => typed_lookup.get(wire_domain),
-        None => None,
-    };
+    if let Some(domain_matched) = lookup.get(wire_domain){
 
-    if let Some(data) = m{ //if we found a match
+        if let Some(data) = domain_matched.get(unsafe{transmute::<&[u8;2], &u16>(&dns_type)}){
+        
+            //produce answers
+            let mut answers:Vec<Vec<u8>> = vec!();
 
-        //produce answers
-        let mut answers:Vec<Vec<u8>> = vec!();
+            for record in data{
 
-        for record in data{
+                let mut answer:Vec<u8> = vec!(0xc0,0x0c); //points to queried name
 
-            let mut answer:Vec<u8> = vec!(0xc0,0x0c); //points to queried name
+                //type
+                answer.push(dns_type[0]);
+                answer.push(dns_type[1]);
 
-            //type
-            answer.push(dns_type[0]);
-            answer.push(dns_type[1]);
+                //class
+                answer.push(dns_class[0]);
+                answer.push(dns_class[1]);
 
-            //class
-            answer.push(dns_class[0]);
-            answer.push(dns_class[1]);
+                //TTL (5 mins)
+                let ttl = unsafe{ transmute::<u32,[u8;4]>(record.ttl) };
+                answer.push(ttl[0]);
+                answer.push(ttl[1]);
+                answer.push(ttl[2]);
+                answer.push(ttl[3]);
 
-            //TTL (5 mins)
-            let ttl = unsafe{ transmute::<u32,[u8;4]>(record.ttl) };
-            answer.push(ttl[0]);
-            answer.push(ttl[1]);
-            answer.push(ttl[2]);
-            answer.push(ttl[3]);
+                //specific answer type
+                let len:[u8;2] = (record.data.len() as u16).to_be_bytes();
+                answer.push(len[0]);
+                answer.push(len[1]);
 
-            //specific answer type
-            let len:[u8;2] = (record.data.len() as u16).to_be_bytes();
-            answer.push(len[0]);
-            answer.push(len[1]);
+                //data record
+                for byte in &record.data{
+                    answer.push(*byte);    
+                }
 
-            //data record
-            for byte in &record.data{
-                answer.push(*byte);    
+                answers.push(answer);
+
             }
 
-            answers.push(answer);
+            ////////////////////////////////////////////////////////////////////////////////
+            // Writing start below this line, so aborting with ERROR in flags etc should happen above
+            ////////////////////////////////////////////////////////////////////////////////
+
+
+            //set anmount of answers
+            header.a.put(answers.len() as u16);
+            /*
+
+            We should not be moving authority nor additional RR's, we can add them ourselves when needed later
+
+            // move stuff downward to make space for answers
+            let offset:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
+            for i in (index..*size).rev(){
+                header.body[i+offset] = header.body[i];
+            }
+            */
+
+            //copy answer into packet
+            // let mut answer_len:usize = 0;
+            let mut answer_index = index;
+            for answer in &answers{
+                header.body[(answer_index)..(answer_index+answer.len())].copy_from_slice(&answer);
+                answer_index += answer.len();
+            }
+
+            //adjust size of packet to send back
+            // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
+            //12 is header size, answer index = Q+A size
+            *size = HEADER_SIZE + answer_index;//+ index + answer_len;
+
+
+            header.flags.set_rcode(NOERROR);
+            header.flags.set_auth(true);
+
+        }else{ //no match
+
+            header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
+            header.flags.set_auth(true);
 
         }
-
-        ////////////////////////////////////////////////////////////////////////////////
-        // Writing start below this line, so aborting with ERROR in flags etc should happen above
-        ////////////////////////////////////////////////////////////////////////////////
-
-
-        //set anmount of answers
-        header.a.put(answers.len() as u16);
-        /*
-
-        We should not be moving authority nor additional RR's, we can add them ourselves when needed later
-
-        // move stuff downward to make space for answers
-        let offset:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
-        for i in (index..*size).rev(){
-            header.body[i+offset] = header.body[i];
-        }
-        */
-
-        //copy answer into packet
-        // let mut answer_len:usize = 0;
-        let mut answer_index = index;
-        for answer in &answers{
-            header.body[(answer_index)..(answer_index+answer.len())].copy_from_slice(&answer);
-            answer_index += answer.len();
-        }
-
-        //adjust size of packet to send back
-        // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
-        //12 is header size, answer index = Q+A size
-        *size = HEADER_SIZE + answer_index;//+ index + answer_len;
-
-
-        header.flags.set_rcode(NOERROR);
-        header.flags.set_auth(true);
-
-    }else{ //no match
-
-        header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
-        header.flags.set_auth(true);
 
     }
+
+
 }
 
 
@@ -437,10 +437,11 @@ struct Config {
     lookup: LookupTable,
 }
 type WireFormat = Vec<u8>;
-type DnsType = u16;
-type LookupTable = HashMap<DnsType, ReverseLookupName>;
-type ReverseLookupName = HashMap<WireFormat, Vec<AnswerData>>;
-
+type WireType = u16;
+// type LookupTable = HashMap<DnsType, ReverseLookupName>;
+// type ReverseLookupName = HashMap<WireFormat, Vec<AnswerData>>;
+type LookupTable = HashMap<WireFormat, LookupType>;
+type LookupType = HashMap<WireType, Vec<AnswerData>>;
 
 #[repr(C)]
 struct Flags{
