@@ -321,6 +321,7 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
 
     //now we are done parsing thee query, we can properly cut off the response (Q=1 and A = #records, rr stuff = 0)
     *size = HEADER_SIZE + index;
+    header.a.put(0);
     header.auth_rr.put(0);
     header.add_rr.put(0);
 
@@ -412,18 +413,18 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
             *size = HEADER_SIZE + answer_index;//+ index + answer_len;
 
 
-            header.flags.set_rcode(NOERROR);
-            header.flags.set_auth(true);
+            // header.flags.set_rcode(NOERROR);
+            // header.flags.set_auth(true);
 
-        }else{ //no match
-
-            header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
-            header.flags.set_auth(true);
-
+        }else{ //no match on type
+            //A has remained 0, which leads to NODATA
         }
 
-    }
+        header.flags.set_rcode(NOERROR); //yes we serve NODATA (AUTH flag set and 0 answers)
 
+    }else{ //no match on domain
+        header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
+    }
 
 }
 
