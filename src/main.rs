@@ -103,7 +103,7 @@ struct AnswerData{
 fn parse_records() -> Result<Config, &'static str>{
 
     // return Ok(lookup_table)
-    let mut zones:HashSet<Vec<u8>> = HashSet::new();
+    let mut zones:HashSet<WireFormat> = HashSet::new();
     let mut stdin = io::stdin().lock();
     let mut chunk = [0u8;1024];
     stdin.read(&mut chunk[..]).expect("Error reading Header chunk from stdin.");
@@ -126,7 +126,7 @@ fn parse_records() -> Result<Config, &'static str>{
         let wire_domain = record.get_wire_domain();
 
         // table domain -> array of answer data
-        let table: &mut HashMap< Vec<u8>, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
+        let table: &mut HashMap< WireFormat, Vec<AnswerData> > = match lookup_table.get_mut(&record.dns_type){
             Some(x) => x,
             None => {
                 lookup_table.insert(record.dns_type, HashMap::new());
@@ -433,11 +433,13 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
 
 #[derive(Clone)]
 struct Config {
-    zones: HashSet<Vec<u8>>, //zones we are authorative over (so thios value + all subdomains )
+    zones: HashSet<WireFormat>, //zones we are authorative over (so thios value + all subdomains )
     lookup: LookupTable,
 }
-type LookupTable = HashMap<u16, ReverseLookupName>;
-type ReverseLookupName = HashMap<Vec<u8>, Vec<AnswerData>>;
+type WireFormat = Vec<u8>;
+type DnsType = u16;
+type LookupTable = HashMap<DnsType, ReverseLookupName>;
+type ReverseLookupName = HashMap<WireFormat, Vec<AnswerData>>;
 
 
 #[repr(C)]
