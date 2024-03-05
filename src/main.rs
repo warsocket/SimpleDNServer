@@ -200,7 +200,7 @@ impl U64be{
 
 fn drop_admin(){
 
-    let nobody:u64 = 65534;
+    let nobody:u64 = 65534; //this value is not valid acroos all unixs, but it is for 64-bits linux
     // let mut r:u64 = 11;
     // let mut e:u64 = 11;
     // let mut s:u64 = 11;
@@ -213,21 +213,11 @@ fn drop_admin(){
             "mov rax, 119",     //sys_setresgid
             "syscall",
 
-            // // "mov rax, 102",     //sys_getuid
-            // "mov rax, 118",     //sys_getresuid
-            // "syscall",
-
             in("rdi") nobody,
             in("rsi") nobody,
             in("rdx") nobody,
-
-            // lateout("rdi") r,
-            // lateout("rsi") e,
-            // lateout("rdx") s,
         }}
     }
-
-    // println!("{} {} {}", r,e,s);
 
 }
 
@@ -372,10 +362,6 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
         }
     }
     header.flags.set_auth(is_authorative);
-    if !is_authorative{ //if we are not authorative, we return REFUSED
-        header.flags.set_rcode(REFUSED);
-        return;
-    }
 
     //now lookup the answer
     if let Some(domain_matched) = lookup.get(wire_domain){
@@ -437,7 +423,6 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
             */
 
             //copy answer into packet
-            // let mut answer_len:usize = 0;
             let mut answer_index = index;
             for answer in &answers{
                 header.body[(answer_index)..(answer_index+answer.len())].copy_from_slice(&answer);
@@ -445,22 +430,33 @@ fn handle(config: &Config, buffer:&mut Buffer, size:&mut usize){
             }
 
             //adjust size of packet to send back
-            // let answer_len:usize = answers.iter().map(|a| a.len()).sum(); //length of the answers
-            //12 is header size, answer index = Q+A size
             *size = HEADER_SIZE + answer_index;//+ index + answer_len;
 
+            //authoritive or not just differs in the one AUTH bit which is already set to the correct value
 
-            // header.flags.set_rcode(NOERROR);
-            // header.flags.set_auth(true);
 
         }else{ //no match on type
-            //A has remained 0, which leads to NODATA
+            //A length has remained 0
+
+            if is_authorative {
+                header.flags.set_rcode(NOERROR); 
+            }else{
+                header.flags.set_rcode(REFUSED);
+            }
+
         }
 
-        header.flags.set_rcode(NOERROR); //yes we serve NODATA (AUTH flag set and 0 answers)
+        
 
     }else{ //no match on domain
-        header.flags.set_rcode(NXDOMAIN); //yes we serve NXDOMAIN based on class + type + dns_name instead of just on the name, not rfc comliant, might be changed in future
+
+        if is_authorative{ //if we are not authorative, we return REFUSED
+            header.flags.set_rcode(NXDOMAIN);    
+            // [rfc2308, page2, section 2.1] the authority section may have SOA, NXT [RFC2065] and SIG RRsets. may != must so we don't bother for now.
+        }else{
+            header.flags.set_rcode(REFUSED);
+        }
+        
     }
 
 }
@@ -476,8 +472,6 @@ struct Config {
 }
 type WireFormat = Vec<u8>;
 type WireType = u16;
-// type LookupTable = HashMap<DnsType, ReverseLookupName>;
-// type ReverseLookupName = HashMap<WireFormat, Vec<AnswerData>>;
 type LookupTable = HashMap<WireFormat, LookupType>;
 type LookupType = HashMap<WireType, Vec<AnswerData>>;
 
@@ -513,8 +507,8 @@ impl Flags{
 
 }
 
-const HEADER_SIZE:usize = 12;
-const POST_Q_SKIP:usize = 4; //size of type and class field in query
+const HEADER_SIZE:usize = 12; //size of all fields excluding body
+const POST_Q_SKIP:usize = 4; //size of type and class field in query which is 2+2 bytes
 #[repr(C)]
 struct Header{
     trans_id: U16be,
