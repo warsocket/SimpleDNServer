@@ -7,6 +7,8 @@ use std::io;
 use std::io::Read;
 // use std::time;
 
+use core::arch::asm;
+
 type Buffer = [u8;0xFFFF];
 
 //0x0001 -> 0x0100 on LE system, stays same on BE system
@@ -196,10 +198,45 @@ impl U64be{
     }
 }
 
+fn drop_admin(){
+
+    let nobody:u64 = 65534;
+    // let mut r:u64 = 11;
+    // let mut e:u64 = 11;
+    // let mut s:u64 = 11;
+
+    if cfg!(all(target_os="linux", target_arch="x86_64")) { //mathces linux 64 bits abi
+        unsafe{asm!{
+            "mov rax, 117",     //sys_setresuid
+            "syscall",
+
+            "mov rax, 119",     //sys_setresgid
+            "syscall",
+
+            // // "mov rax, 102",     //sys_getuid
+            // "mov rax, 118",     //sys_getresuid
+            // "syscall",
+
+            in("rdi") nobody,
+            in("rsi") nobody,
+            in("rdx") nobody,
+
+            // lateout("rdi") r,
+            // lateout("rsi") e,
+            // lateout("rdx") s,
+        }}
+    }
+
+    // println!("{} {} {}", r,e,s);
+
+}
+
 
 fn main() -> std::io::Result<()> {
     
     let master_socket = UdpSocket::bind("127.53.53.53:53")?;
+    drop_admin();
+    
     // let master_socket = UdpSocket::bind("::1:53")?;
     let num_threads:u16 = 8;
     let config:Config = parse_records().expect("Could not parse configuration");
