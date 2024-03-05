@@ -132,7 +132,7 @@ records = []
 for line in sys.stdin:
 
 	line = line.rstrip().split("#",1)[0] #remove trailing  newline, remove comments
-	split = re.split(" +|\t+|\n+", line, 4) # split into parameters
+	split = re.split("[ \t\n]+", line, 4) # split into parameters
 	if split == [""]: continue # ignore empty lines
 
 	try:
